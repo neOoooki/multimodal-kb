@@ -26,8 +26,14 @@ _verify/
 node_modules/
 *.png
 !docs/evidence/*.png
+# 样例 PDF 是生成的（见 tests/fixtures/README.md），CI 里现算现用
+tests/fixtures/sample-2p.pdf
 
 # ---- 编辑器/系统 ----
 .vscode/
 .idea/
 .DS_Store
+
+# ---- 本地大文件 / 参考资料（不入库）----
+test-book.pdf
+往期报告.pdf

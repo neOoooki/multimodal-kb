@@ -1,39 +1,75 @@
 # ============================================================
-#  一键起：Qdrant + 检索服务（可选 Open WebUI）
+#  一键起：Qdrant + 初始化 + 检索服务（可选 Open WebUI）
 #
 #    cd deploy
 #    cp .env.example .env      # 填 DASHSCOPE_API_KEY / MINERU_TOKEN
-#    docker compose up -d
+#    docker compose up -d --wait
 #
-#  首次启动会自动建目录、修权限（见 deploy.sh）。
+#  依赖图（顺序由**声明**决定，不由 shell 脚本的 sleep 决定）：
+#
+#      qdrant ──service_healthy──┬──► mmkb-init ──service_completed_successfully──► mmkb
+#                               └────────────────service_healthy──────────────────► mmkb
+#                                                                                    │
+#                                                       openwebui ──service_healthy──┘
+#
+#  为什么要有 mmkb-init 这个一次性服务：
+#    集合必须**在检索服务开始对外服务之前**建好。以前这一步写在 deploy.sh 里、
+#    且排在一个"等 /health 返回 200"的轮询之后 —— 而 /health 要集合存在才返回 200，
+#    于是全新安装形成死锁，永远起不来（报告二 R1）。
+#    把它变成 compose 里的一个显式步骤后：顺序可被 `docker compose config` 校验、
+#    可被 CI 复用、也不会再出现"第三个实现藏在 shell 里"。
+#
+#  版本要求：docker compose v2.20+（`up --wait` 与一次性依赖的兼容见
+#    docker/compose#9572；更早的版本会在一次性服务上永久等待）。
+#    Compose v5.3+ 可用更简洁的 `pre_start:` 取代下面的 mmkb-init（见文末注释）。
 # ============================================================
 name: mmkb
 
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: mmkb-qdrant
     restart: unless-stopped
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
       - ../data/qdrant:/qdrant/storage
     healthcheck:
+      # 只探 TCP：Qdrant 的 /readyz 是浅探针（"started and ready to be used"），
+      # 而这里需要的正是"进程起来了"。集合是否可用由 mmkb 的 /readyz 回答。
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 10
+
+  # ---- 一次性初始化：建集合（幂等，重复 up 会再跑一次也没关系）----
+  mmkb-init:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: mmkb/service:latest
+    restart: "no"                      # 一次性任务绝不能设 restart 策略
+    user: "${MMKB_UID:-1000}:${MMKB_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      MMKB_WORK_DIR: /data/work
+      MMKB_PARSED_DIR: /data/parsed
+    volumes:
+      - ../data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    command: ["kb", "init"]
 
   mmkb:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
     image: mmkb/service:latest
-    container_name: mmkb-service
     restart: unless-stopped
     # 以宿主用户身份运行：否则容器写的 data/work/*.json 会是 root 属主，
     # 导致宿主机侧跑 kb ingest 或 make distclean 时 Permission denied。
-    # （Qdrant 官方镜像不支持非 root 启动，那边只能靠 chown 兜底）
     user: "${MMKB_UID:-1000}:${MMKB_GID:-1000}"
     ports:
       - "${MMKB_PORT:-8088}:8088"
@@ -54,8 +90,15 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+      # 集合建好之后才启动 —— 这就是修掉全新安装死锁的那一行
+      mmkb-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8088/health',timeout=3).status==200 else 1)\""]
+      # 指 /livez（**不碰依赖**），不是 /readyz。
+      # compose 的 healthcheck 同时喂给 `depends_on: service_healthy` 和 `up --wait`，
+      # 把依赖状态塞进去会让"Qdrant 抖一下"变成"启动失败"。就绪由 deploy.sh 与
+      # 外部监控看 /readyz。
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8088/livez',timeout=3).status==200 else 1)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -65,7 +108,6 @@ services:
   #   docker compose --profile chat up -d
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: mmkb-openwebui
     restart: unless-stopped
     profiles: ["chat"]
     ports:
@@ -81,7 +123,21 @@ services:
       - mmkb-openwebui-data:/app/backend/data
     depends_on:
       mmkb:
+        # healthcheck 现在是 /livez（不碰依赖），所以这道门是"HTTP 服务已在监听"，
+        # 比 service_started 更准确，且不会被 Qdrant 抖动影响。
         condition: service_healthy
+
+# 注：容器名（container_name）刻意不写死 —— 写死会让同一台机器上无法用 -p 起第二套
+# （CI、灰度、契约测试都要起第二套），并且会和 --scale 冲突。
+# 需要固定名字时用 `docker compose -p <名字>` 或 `docker ps --filter label=...`。
+
+# 注：Compose v5.3+ 可以用更简洁的原生 init 容器取代整个 mmkb-init 服务：
+#   mmkb:
+#     depends_on: {qdrant: {condition: service_healthy}}
+#     pre_start:
+#       - command: ["kb", "init"]
+# 效果等价，且 `docker compose ps` 里不会多出一个"已退出"的服务。
+# 这里默认用一次性服务版本，是为了兼容更广的 Compose 版本。
 
 volumes:
   mmkb-openwebui-data:

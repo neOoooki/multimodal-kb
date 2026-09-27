@@ -1,0 +1,55 @@
+# ============================================================
+#  部署契约测试（CI）
+#
+#  为什么只有这一件事必须先做：
+#    两次阻断级故障（报告一 P1、报告二 R1）都**只在干净环境**暴露 ——
+#    "重复执行 deploy.sh" 是通的，因为集合已经存在。
+#    没有这条 CI，部署回归会继续以同样方式复发。
+#
+#  本工作流不需要任何密钥：
+#    fresh-install 只验证"全新环境能否收敛到就绪"，不调用任何外部 API
+#    （DASHSCOPE_API_KEY / MINERU_TOKEN 用的是假值）。
+#    需要真 key 的"样例 PDF 入库冒烟"是 scripts/deploy-test.sh --with-ingest，
+#    可在有 secrets 的环境里单独开一个 job。
+#
+#  覆盖：场景 1（全新安装）+ 场景 2（幂等）
+#  待补：场景 3（升级）、4（清理）、5（宿主/容器混用）、6（健康契约）、7（配置校验）
+# ============================================================
+name: deploy-contract
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支的旧运行直接取消，避免占着 16333/18088 端口打架
+  group: deploy-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-install:
+    name: 全新安装契约
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 环境信息
+        run: |
+          docker version
+          docker compose version
+
+      # 脚本自己负责：干净副本、独立项目名/端口、失败诊断、收尾清理
+      - name: 全新安装（无缓存卷、无预建集合）
+        run: ./scripts/deploy-test.sh
+
+      - name: 失败时收集诊断
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose ls -a || true
+          docker images | head -20

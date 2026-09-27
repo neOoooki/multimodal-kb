@@ -105,29 +105,61 @@ fi
 ok "数据目录可写"
 
 # ---------------------------------------------------------------
-step "4/6 构建并启动"
+step "4/6 构建并启动（收敛由 compose 声明决定）"
 
 PROFILE_ARG=""
 [ "$WITH_CHAT" = "1" ] && PROFILE_ARG="--profile chat"
 
-$DC $PROFILE_ARG up -d --build
-ok "容器已启动"
+# 版本门槛：`up --wait` 与"一次性依赖"的兼容是 docker/compose#9572 才修好的，
+# 更早的版本会在一次性服务上永久等待。
+DC_VERSION="$($DC version --short 2>/dev/null || echo '?')"
+say "  ${DIM}compose ${DC_VERSION}${RST}"
+
+# 顺序（qdrant 健康 → mmkb-init 建集合 → mmkb 启动 → openwebui）全部写在
+# docker-compose.yml 的 depends_on 里，这里不再有任何 sleep/轮询编排。
+# 以前这里先轮询 /health 等 200、之后才 `kb init` —— 而集合不存在时
+# /health 返回 503，于是全新安装死锁（报告二 R1）。
+WAIT_TIMEOUT="${MMKB_WAIT_TIMEOUT:-300}"
+if ! $DC $PROFILE_ARG up -d --build --wait --wait-timeout "$WAIT_TIMEOUT"; then
+  say ""
+  $DC ps -a 2>&1 | sed 's/^/    /' || true
+  say ""
+  $DC logs --tail=60 mmkb-init 2>&1 | sed 's/^/    /' || true
+  $DC logs --tail=60 mmkb 2>&1 | sed 's/^/    /' || true
+  die "服务未能在 ${WAIT_TIMEOUT}s 内收敛（看上面的 ps/logs）"
+fi
+ok "容器已启动且健康"
 
 # ---------------------------------------------------------------
-step "5/6 等待健康检查"
+step "5/6 就绪断言（业务语义：集合可用）"
 
 PORT="${MMKB_PORT:-8088}"
-for i in $(seq 1 40); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/health" 2>/dev/null || true)
-  if [ "$code" = "200" ]; then ok "检索服务就绪（http://localhost:${PORT}）"; break; fi
-  [ "$i" = "40" ] && die "检索服务 120 秒内没起来，查看日志：$DC logs mmkb"
-  sleep 3
+READY_URL="http://localhost:${PORT}/readyz"
+ready_ok=0
+for i in $(seq 1 30); do
+  if curl -sf "$READY_URL" -o /tmp/.mmkb_ready.$$ 2>/dev/null; then ready_ok=1; break; fi
+  sleep 1
 done
+if [ "$ready_ok" = "1" ]; then
+  ok "就绪（${READY_URL}）：$(cat /tmp/.mmkb_ready.$$)"
+else
+  warn "就绪端点未通过：${READY_URL}"
+fi
+rm -f /tmp/.mmkb_ready.$$
+# 注意：这里判的是 /readyz（依赖 + 集合），不是 /livez。
+# compose 的 healthcheck 故意只探 /livez —— 两者职责不同，见 docker-compose.yml 注释。
 
-# 自动建集合。否则 `kb ingest` 会在跑完解析+标注+向量化（花钱花时间）之后
-# 才在最后一步 upsert 报 "Collection doesn't exist"。
-$DC exec -T mmkb kb init >/dev/null 2>&1 && ok "集合已就绪" \
-  || warn "自动 kb init 没成功，请手动执行：$DC exec mmkb kb init"
+# ---------------------------------------------------------------
+# 带了 chat 前端时，顺手把 Pipe Function 装进去。
+# Open WebUI 的 in-process Function 存在它自己的数据库里，只能通过它的 API 注册 ——
+# 不装的话"模型下拉里选多模态知识库"这一步根本不存在。
+if [ "$WITH_CHAT" = "1" ]; then
+  step "5b/6 接入 Open WebUI（安装 Pipe Function）"
+  OWUI_URL="http://localhost:${OWUI_PORT:-3000}" \
+    python3 "$ROOT/integrations/openwebui/install_owui_function.py" 2>&1 | sed 's/^/  /' \
+    || warn "自动安装失败，可手动重试：
+      OWUI_URL=http://localhost:${OWUI_PORT:-3000} python3 integrations/openwebui/install_owui_function.py"
+fi
 fi
 
 # ---------------------------------------------------------------

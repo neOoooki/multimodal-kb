@@ -3,7 +3,7 @@
 # ============================================================
 
 .PHONY: help install doctor status ingest search eval demo serve test \\
-        deploy deploy-chat deploy-down deploy-verify clean distclean fmt
+        test-deploy test-deploy-chat deploy deploy-chat deploy-down deploy-verify clean distclean fmt
 
 help:            ## 显示本帮助
 	@grep -E "^[a-zA-Z_-]+:.*?## " $(MAKEFILE_LIST) | awk "BEGIN{FS=\":.*?## \"}{printf \"  \\033[36m%-16s\\033[0m %s\\n\", \$$1, \$$2}"
@@ -42,6 +42,12 @@ demo:            ## 交互式演示
 # ---------- 测试 ----------
 test:            ## 冒烟测试（需要服务和 Qdrant 在跑）
 	python3 tests/smoke_test.py
+
+test-deploy:     ## 部署契约测试：在一个干净副本上做全新安装（不需要真 key）
+	./scripts/deploy-test.sh
+
+test-deploy-chat: ## 同上，外加验证 Open WebUI 集成（需本地已有 6.5GB 镜像）
+	./scripts/deploy-test.sh --with-chat
 
 # ---------- 部署 ----------
 deploy:          ## 一键部署（Qdrant + 检索服务）

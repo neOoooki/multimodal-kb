@@ -39,10 +39,13 @@ cd deploy
 # Open WebUI 在 http://localhost:3000
 ```
 
-或手动：
+`--with-chat` 会把 **Pipe Function 一起装好**（1.2 那一步不用手动做）：
+起 compose 的 `chat` profile → 建/登录管理员 → 注册并启用 Function → 自检里多两条断言。
+
+或手动（注意 `MMKB_SEARCH_URL` 用宿主 IP 或服务名，**不能用 localhost**）：
 
 ```bash
-docker run -d --name mmkb-openwebui --restart unless-stopped \
+docker run -d --name mmkb-openwebui-manual --restart unless-stopped \
   -p 3000:8080 \
   -e OPENAI_API_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   -e OPENAI_API_KEY=sk-你的百炼Key \
@@ -59,17 +62,29 @@ docker run -d --name mmkb-openwebui --restart unless-stopped \
 ### 1.2 装 Pipe Function
 
 ```bash
-cd integrations/openwebui
-python3 install_owui_function.py
+# 在仓库根目录跑（compose 部署时 OWUI_URL 默认就是 localhost:3000）
+python3 integrations/openwebui/install_owui_function.py
 ```
 
 脚本会：
-1. 创建/登录管理员账号
-2. 把 `pipe.py` 注册成 Open WebUI 的 Function
-3. 自动启用
+1. 登录管理员；没有账号就注册（**Open WebUI 的第一个用户自动是 admin**）
+2. 把 `pipe.py` 注册成 Function（**已存在则更新内容**，重复执行安全）
+3. 确保它是启用状态，并回读一次验证（含"模型下拉里能否看到"）
+
+可覆盖的环境变量：`OWUI_URL`、`OWUI_ADMIN_EMAIL`（默认 `admin@mmkb.local`）、
+`OWUI_ADMIN_PASS`（默认 `Mmkb@2026`）、`OWUI_FUNCTION_ID`（默认 `mmkb`）。
+已有别的管理员账号时，用它来指定即可：
+
+```bash
+OWUI_ADMIN_EMAIL=you@example.com OWUI_ADMIN_PASS='你的密码' \
+  python3 integrations/openwebui/install_owui_function.py
+```
 
 手动装：Open WebUI → 右上角头像 → **管理员设置 → 函数 → 新建函数**，
 把 `integrations/openwebui/pipe.py` 的内容粘进去，保存并启用。
+
+> Open WebUI 的 in-process Function 存在**它自己的数据库**里，只能通过它的 API/管理界面注册 ——
+> 把文件丢进容器的 `data/functions/` 目录是不生效的。
 
 ### 1.3 用
 
@@ -106,21 +121,37 @@ async def pipe(self, body, __user__=None, __event_emitter__=None):
 `EXTERNAL_KNOWLEDGE_PROVIDERS` 只支持 `qdrant` / `milvus` / `pgvector`
 **直连向量库**，不是任意 HTTP 检索 API。要用 Pipe Function。
 
-### 1.6 已验证
+### 1.6 验证
 
-用无头 Chromium 实测（`integrations/openwebui/` 里有验证脚本）：
+仓库里带了端到端验证脚本，**验的不是"容器起来了"，而是这条链路真的通**：
 
-```
-指向检索服务的 <img>: 3
-  [1] 加载成功=true  尺寸=470x292  可见=true
-  [2] 加载成功=true  尺寸=618x406  可见=true
-  [3] 加载成功=true  尺寸=709x426  可见=true
-回答里出现 '![' 字面量（说明没渲染）: false
-→ ✅ 图片确实渲染并加载成功
+```bash
+python3 integrations/openwebui/verify_integration.py
+# 默认问「万用表怎么用？」，可用 Q="..." 覆盖
 ```
 
-截图见 [evidence/openwebui_rendered.png](evidence/openwebui_rendered.png)
-—— 电路图、LaTeX 公式、章节路径引用都正常。
+它做四类断言：
+
+1. Open WebUI 在跑、Function 已装且已启用
+2. 通过 `/api/chat/completions`（`model=mmkb`）走一遍 pipe，拿到非空回答
+3. 回答里**不含**原始 `<img>`（Open WebUI 只渲染 `![]()`）
+4. 检索服务为该问题命中的**每一张图**都出现在回答里，且 URL 真能取到（HTTP 200）
+
+第 4 条就是"确定性注入"的核心契约。实测输出：
+
+```
+1/4 检索服务       ✅ /search 返回 5 条   ✅ 该问题命中 1 张图
+2/4 Open WebUI     ✅ 已登录   ✅ Function「多模态知识库」已安装且已启用
+3/4 走 pipe        ✅ 拿到回答（1285 字）  ✅ 回答里没有原始 <img>
+4/4 确定性图片注入  ✅ 命中的 1 张图全部出现在回答里
+                   ✅ 回答里 1 个图片 URL 全部可直连（HTTP 200）
+  通过 8 项 —— Open WebUI 集成链路通 ✅
+```
+
+> 这条链路曾用无头 Chromium 做过浏览器侧实测（图片确实渲染、无 Markdown 字面量残留），
+> 截图见 [evidence/openwebui_rendered.png](evidence/openwebui_rendered.png)
+> —— 电路图、LaTeX 公式、章节路径引用都正常。
+> 上面的脚本是它的**可重复版本**（不依赖浏览器，CI 友好）。
 
 ---
 

@@ -166,34 +166,57 @@ def make_handler(svc: KBSearchService, extra_routes: dict | None = None):
         def do_OPTIONS(self):
             self._send(204, b"")
 
+        # -- 健康探针 ----------------------------------------------------
+        def _livez(self):
+            """
+            存活：**只回答"进程是否活着"**，不碰任何外部依赖。
+
+            为什么必须与就绪分开：compose 的 healthcheck 只被
+            `depends_on: service_healthy` 和 `up --wait` 消费（非 Swarm 下
+            既不重启容器也不摘端口）。把"依赖是否可用"塞进它，会让**依赖抖动
+            变成启动失败** —— 这正是 R1 那次全新部署死锁的机制。
+            依赖可用性归 /readyz，由编排方/负载均衡各自决定怎么用。
+            """
+            return self._send(200, {"status": "alive"})
+
+        def _readyz(self):
+            """
+            就绪：**能不能真正服务请求** —— Qdrant 可达 + 集合存在 + 可计数。
+
+            不允许吞异常：曾经这里 `except: pass`，导致 Qdrant 挂了也报
+            status=ok，部署自检"假绿"（P2）。
+            """
+            store = svc.pipe.store
+            info: dict = {"collection": store.collection}
+            qdrant_ok = store.alive()
+            info["qdrant_reachable"] = qdrant_ok
+            if not qdrant_ok:
+                info.update(status="degraded", points=0, collection_exists=False,
+                            error=f"Qdrant 不可达：{store.url}")
+                return self._send(503, info)
+            try:
+                store.info()
+                info["collection_exists"] = True
+                info["points"] = store.count()
+                info["status"] = "ok"
+                return self._send(200, info)
+            except Exception as e:
+                info.update(status="degraded", points=0, collection_exists=False,
+                            error=f"集合 {store.collection} 不存在或不可读：{str(e)[:160]}")
+                return self._send(503, info)
+
         # -- 路由 --
         def do_GET(self):
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
 
-            if path == "/health":
-                # 如实上报：Qdrant 可达性、集合是否存在都不能被吞掉。
-                # 曾经这里 `except: pass` 把 Qdrant 挂了也报 status=ok，
-                # 导致部署自检"假绿"。
-                store = svc.pipe.store
-                info: dict = {"collection": store.collection}
-                qdrant_ok = store.alive()
-                info["qdrant_reachable"] = qdrant_ok
-                if not qdrant_ok:
-                    info.update(status="degraded", points=0, collection_exists=False,
-                                error=f"Qdrant 不可达：{store.url}")
-                    # 用 503 让调用方（健康检查/自检脚本）能直接判失败
-                    return self._send(503, info)
-                try:
-                    store.info()
-                    info["collection_exists"] = True
-                    info["points"] = store.count()
-                    info["status"] = "ok"
-                    return self._send(200, info)
-                except Exception as e:
-                    info.update(status="degraded", points=0, collection_exists=False,
-                                error=f"集合 {store.collection} 不存在或不可读：{str(e)[:160]}")
-                    return self._send(503, info)
+            # 存活：最先判、最便宜，绝不触发任何依赖 I/O
+            if path in ("/livez", "/healthz"):
+                return self._livez()
+
+            # 就绪：/health 保留为兼容别名（老脚本、老 compose 仍指它）
+            if path in ("/readyz", "/health"):
+                return self._readyz()
 
             # GET 版检索：给 Dify 的 HTTP 请求节点用。
             # 为什么需要它：Dify 的 JSON body 是把变量**原样**塞进 JSON 字符串模板，
@@ -275,7 +298,8 @@ def serve(svc: KBSearchService, host: str = "0.0.0.0", port: int = 8088,
           extra_routes: dict | None = None):
     httpd = ThreadingHTTPServer((host, port), make_handler(svc, extra_routes))
     print(f"检索服务已启动：http://{host}:{port}")
-    print(f"  健康检查  GET  /health")
+    print(f"  存活      GET  /livez    （不碰依赖；compose healthcheck 指它）")
+    print(f"  就绪      GET  /readyz   （Qdrant + 集合；未就绪 503；/health 为兼容别名）")
     print(f"  检索      POST /search   {{\"query\":\"...\",\"top_k\":5,\"rerank\":true}}")
     print(f"  图片      GET  /images/{{doc_id}}/{{name}}")
     for (m, prefix) in (extra_routes or {}):

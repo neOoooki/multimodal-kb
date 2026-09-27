@@ -37,9 +37,16 @@ chk "集合 ${COLL} 存在" \
     "集合不存在。先建： docker compose exec mmkb kb init"
 
 # ---------------- 2) 服务 ----------------
-curl -s "http://localhost:${PORT}/health" -o "$TMP/health.json" 2>/dev/null || echo '{}' > "$TMP/health.json"
+# 存活与就绪**分开判**：
+#   /livez  只说明进程活着（compose healthcheck 指它）
+#   /readyz 说明依赖 + 集合都可用（外部监控与自检指它）
+# 合成一个端点会让"依赖抖动"和"进程挂掉"无法区分 —— P2/R1 的根源。
+chk "服务存活 (:${PORT}/livez)" \
+    "curl -sf http://localhost:${PORT}/livez"
+
+curl -s "http://localhost:${PORT}/readyz" -o "$TMP/health.json" 2>/dev/null || echo '{}' > "$TMP/health.json"
 HEALTH_TXT="$(cat "$TMP/health.json")"
-chk "检索服务健康 (:${PORT})" \
+chk "服务就绪 (:${PORT}/readyz，Qdrant + 集合)" \
     "python3 -c \"import json,sys; sys.exit(0 if json.load(open('$TMP/health.json')).get('status')=='ok' else 1)\"" \
     "$HEALTH_TXT"
 POINTS="$(python3 -c "import json;print(json.load(open('$TMP/health.json')).get('points',0))" 2>/dev/null || echo 0)"
@@ -77,6 +84,39 @@ print(next((i['url'] for r in d.get('results', []) for i in r.get('images', []))
   else
     skip "库里没有带图的分块，跳过图片断言"
   fi
+fi
+
+# ---------------- 5) chat 前端（可选，未启用就跳过）----------------
+OWUI_PORT="${OWUI_PORT:-3000}"
+if curl -sf -o /dev/null "http://localhost:${OWUI_PORT}/" 2>/dev/null; then
+  chk "Open WebUI 可达 (:${OWUI_PORT})" \
+      "curl -sf -o /dev/null http://localhost:${OWUI_PORT}/health"
+  # Function 是否装好要登录后才看得到；这里只确认容器在跑，
+  # 完整链路用 integrations/openwebui/verify_integration.py 验。
+  FN_OK="$(python3 - <<PY 2>/dev/null || echo unknown
+import json, urllib.request, urllib.error
+try:
+    r = urllib.request.Request("http://localhost:${OWUI_PORT}/api/v1/auths/signin",
+        data=json.dumps({"email":"admin@mmkb.local","password":"Mmkb@2026"}).encode(),
+        method="POST")
+    r.add_header("Content-Type","application/json")
+    tok = json.loads(urllib.request.urlopen(r, timeout=20).read())["token"]
+    q = urllib.request.Request("http://localhost:${OWUI_PORT}/api/v1/functions/")
+    q.add_header("Authorization", "Bearer " + tok)
+    fns = json.loads(urllib.request.urlopen(q, timeout=20).read())
+    print("yes" if any(f.get("id")=="mmkb" and f.get("is_active") for f in fns) else "no")
+except Exception:
+    print("unknown")
+PY
+)"
+  case "$FN_OK" in
+    yes) chk "Pipe Function「多模态知识库」已装且启用" "true" ;;
+    no)  chk "Pipe Function「多模态知识库」已装且启用" "false" \
+             "未安装/未启用 → python3 integrations/openwebui/install_owui_function.py" ;;
+    *)   skip "Pipe Function 状态未知（还没有管理员账号？）" ;;
+  esac
+else
+  skip "Open WebUI 未启用（./deploy.sh --with-chat 可起）"
 fi
 
 # ---------------- 汇总 ----------------
