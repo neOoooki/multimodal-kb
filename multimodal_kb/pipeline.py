@@ -70,6 +70,15 @@ class MultimodalKBPipeline:
         import hashlib
         return kind + ":" + hashlib.sha256(data.encode("utf-8")).hexdigest()[:24]
 
+    @staticmethod
+    def _file_hash(path: Path) -> str:
+        """图片内容哈希（短）。用于让缓存 key 与绝对路径无关。"""
+        import hashlib
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+        except Exception:
+            return "?"
+
     # -- 存储 -------------------------------------------------------------
     def init_store(self, recreate: bool = False) -> None:
         if not self.store.alive():
@@ -180,20 +189,34 @@ class MultimodalKBPipeline:
                     c.vector_text = self.embedder.text_one(text)
                     self._vec_cache[k] = c.vector_text; self._cache_save(); miss += 1
                 except Exception as e:
-                    print(f"   文本向量失败 chunk {i}: {str(e)[:100]}")
+                    print(f"   文本向量失败 chunk {i}: {str(e)[:200]}")
 
             # 融合向量：正文 + 首张图（多图时其余走 image 路）
-            first = next((root / im.path for im in c.images if (root / im.path).exists()), None)
-            fk = self._vkey("fusion", text + "||" + (str(first) if first else ""))
+            #
+            # 缓存 key 用 **图片相对路径 + 内容哈希**，不用绝对路径 ——
+            # 否则同一份数据换台机器/换个挂载点（容器内 vs 宿主机）就必然不命中，
+            # "有缓存"省钱的意图就白费了。
+            first = next((im for im in c.images if (root / im.path).exists()), None)
+            if first:
+                img_key = f"{first.path}@{self._file_hash(root / first.path)}"
+            else:
+                img_key = ""
+            fk = self._vkey("fusion", text + "||" + img_key)
             if fk in self._vec_cache:
                 c.vector_fusion = self._vec_cache[fk]; hit += 1
             else:
                 try:
-                    c.vector_fusion = self.embedder.fusion_one(text, first)
+                    # 注意传**路径**，不是 ImageRef 对象；没有图时传 None
+                    # （此时 fusion 等价于纯文本向量，仍是同一维度的 2560）
+                    img_path = (root / first.path) if first else None
+                    c.vector_fusion = self.embedder.fusion_one(text, img_path)
                     self._vec_cache[fk] = c.vector_fusion; self._cache_save(); miss += 1
                 except Exception as e:
-                    print(f"   融合向量失败 chunk {i}: {str(e)[:100]}")
-                    c.vector_fusion = c.vector_text
+                    # 不回退成文本向量 —— 两者维度不同（fusion 2560 / text 1024），
+                    # 塞进 fusion 槽位会在 Qdrant 报 "Vector dimension error"，
+                    # 把真正的失败原因掩盖掉。宁可这条 chunk 少一路向量。
+                    print(f"   融合向量失败 chunk {i}（跳过该路，不影响 text 路）: {str(e)[:200]}")
+                    c.vector_fusion = None
 
             # 图片向量（每张图）
             if self.cfg.embed_images:
@@ -201,7 +224,7 @@ class MultimodalKBPipeline:
                     p = root / im.path
                     if not p.exists():
                         continue
-                    ik = self._vkey("image", im.path)
+                    ik = self._vkey("image", f"{im.path}@{self._file_hash(p)}")
                     if ik in self._vec_cache:
                         c.vector_images.append(self._vec_cache[ik]); hit += 1
                         continue

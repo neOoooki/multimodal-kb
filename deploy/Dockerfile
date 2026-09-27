@@ -24,6 +24,12 @@ ENV TZ=Asia/Shanghai \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# 第三方适配器（Dify 等）。它们不属于核心包，放在镜像的 /app/integrations 下，
+# 由 MMKB_ENABLE_DIFY_ADAPTER=1 决定是否挂载。
+COPY integrations /app/integrations
+# 兜底：源码权限若被带成 600，非 root 运行时会读不到（踩过）
+RUN chmod -R a+rX /app/integrations
+
 # 运行期数据（缓存 + 解析产物 + 图片）都挂到这里
 ENV MMKB_WORK_DIR=/data/work \
     MMKB_PARSED_DIR=/data/parsed

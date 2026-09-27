@@ -48,6 +48,12 @@ else
 fi
 ok "compose 可用（$DC）"
 
+# compose 里的 `user:` 要用宿主 uid/gid，否则容器会以 root 在挂载目录留文件。
+# UID/GID 是 shell 内建变量，默认不导出，必须显式 export。
+export MMKB_UID="$(id -u)"
+export MMKB_GID="$(id -g)"
+ok "容器将以 $(id -u):$(id -g) 运行（避免遗留 root 属主文件）"
+
 if [ "$ACTION" = "down" ]; then
   step "停止服务"
   $DC --profile chat down
@@ -117,6 +123,11 @@ for i in $(seq 1 40); do
   [ "$i" = "40" ] && die "检索服务 120 秒内没起来，查看日志：$DC logs mmkb"
   sleep 3
 done
+
+# 自动建集合。否则 `kb ingest` 会在跑完解析+标注+向量化（花钱花时间）之后
+# 才在最后一步 upsert 报 "Collection doesn't exist"。
+$DC exec -T mmkb kb init >/dev/null 2>&1 && ok "集合已就绪" \
+  || warn "自动 kb init 没成功，请手动执行：$DC exec mmkb kb init"
 fi
 
 # ---------------------------------------------------------------

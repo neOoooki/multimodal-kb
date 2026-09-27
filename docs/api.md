@@ -8,15 +8,39 @@
 
 ## `GET /health`
 
-健康检查。
+健康检查。**会如实反映 Qdrant 与集合的状态**，不再"假绿"。
 
 ```bash
 curl localhost:8088/health
 ```
 
+集合正常时 —— **HTTP 200**：
+
 ```json
-{"status": "ok", "points": 431, "collection": "mmkb"}
+{
+  "status": "ok",
+  "collection": "mmkb",
+  "qdrant_reachable": true,
+  "collection_exists": true,
+  "points": 431
+}
 ```
+
+Qdrant 挂了或集合不存在时 —— **HTTP 503**（便于健康检查/自检脚本直接判失败）：
+
+```json
+{
+  "status": "degraded",
+  "collection": "mmkb",
+  "qdrant_reachable": true,
+  "collection_exists": false,
+  "points": 0,
+  "error": "集合 mmkb 不存在或不可读：Qdrant GET /collections/mmkb -> HTTP 404: ..."
+}
+```
+
+> 早期版本这里用 `try/except: pass` 吞掉异常，Qdrant 挂了也返回 `status: ok`，
+> 导致部署自检**假绿**。现在状态与 HTTP 码都如实反映。
 
 ---
 

@@ -438,12 +438,21 @@ def cmd_ingest(args) -> int:
     cfg = load_cfg()
     pipe = load_pipe(cfg)
     title(f"入库：{Path(args.pdf).name}")
+
+    # 自动建集合（幂等）。**必须在解析/标注/向量化之前** ——
+    # 否则会在花钱花时间跑完全部流程后，卡在最后一步 upsert 报
+    # "Collection doesn't exist"，非常糟糕的首次体验。
+    pipe.init_store()
     parsed = args.parsed_dir
     if not parsed:
         cand = parsed_root() / Path(args.pdf).stem
-        if cand.exists():
+        # 必须校验**完整性**再复用：上一次失败可能留下一个空目录，
+        # 直接复用会报 "找不到 content_list*.json"，误导排查方向。
+        if cand.is_dir() and list(cand.glob("*_content_list*.json")):
             parsed = str(cand)
             info(f"复用已有解析产物：{parsed}")
+        elif cand.is_dir():
+            warn(f"发现不完整的解析目录 {cand}（没有 content_list），将重新解析")
     stats = pipe.ingest_pdf(args.pdf, doc_name=args.name, parsed_dir=parsed,
                             doc_id=args.doc_id, limit_chunks=args.limit)
     title("入库完成")
@@ -715,27 +724,35 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def _env_flag(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def cmd_serve(args) -> int:
     """启动检索服务（进程内，不依赖任何额外脚本）。"""
     from multimodal_kb.service.app import KBSearchService, serve
     cfg = load_cfg()
     cfg.service_port = args.port
     cfg.service_host = args.host
-    if args.enable_dify_adapter:
-        cfg.enable_dify_adapter = True   # type: ignore[attr-defined]
+    # 适配器开关：命令行 flag 或环境变量（容器里用后者更方便）
+    enable_adapter = args.enable_dify_adapter or _env_flag("MMKB_ENABLE_DIFY_ADAPTER")
     pipe = load_pipe(cfg)
     svc = KBSearchService(pipe, public_base_url=cfg.public_base_url,
                           parsed_root=Path(cfg.parsed_dir))
 
     routes = {}
-    if args.enable_dify_adapter:
+    if enable_adapter:
         # 适配器在 integrations/ 下，**不属于核心包**，所以这里做运行时可选加载：
         # 从源码运行时能找到；pip 安装后 integrations/ 不在包里，会给出明确提示。
+        # 先看源码目录，再看镜像内约定路径 /app/integrations/dify
         adapter_dir = ROOT / "integrations" / "dify"
         if not (adapter_dir / "external_kb.py").exists():
-            print(yellow("未找到 integrations/dify/external_kb.py"))
-            print(dim("  （适配器不在核心包里；请从源码目录运行，或直接用 HTTP 请求节点"
-                      "——见 docs/chat-integration.md）"))
+            alt = Path("/app/integrations/dify")
+            if (alt / "external_kb.py").exists():
+                adapter_dir = alt
+        if not (adapter_dir / "external_kb.py").exists():
+            print(yellow(f"未找到 Dify 适配器（找过 {adapter_dir} 与 /app/integrations/dify）"))
+            print(dim("  可以直接用 HTTP 请求节点，效果一样 —— 见 docs/chat-integration.md"))
         else:
             sys.path.insert(0, str(adapter_dir))
             try:
@@ -838,6 +855,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--adapter-token", default=os.environ.get("MMKB_ADAPTER_TOKEN"),
                    help="Dify 适配器的 Bearer token（不填则不鉴权）")
     p.set_defaults(func=cmd_serve)
+    # 也支持 MMKB_ENABLE_DIFY_ADAPTER=1（容器里用环境变量更顺手）
 
     return ap
 

@@ -172,13 +172,28 @@ def make_handler(svc: KBSearchService, extra_routes: dict | None = None):
             path = unquote(parsed.path)
 
             if path == "/health":
-                n = 0
+                # 如实上报：Qdrant 可达性、集合是否存在都不能被吞掉。
+                # 曾经这里 `except: pass` 把 Qdrant 挂了也报 status=ok，
+                # 导致部署自检"假绿"。
+                store = svc.pipe.store
+                info: dict = {"collection": store.collection}
+                qdrant_ok = store.alive()
+                info["qdrant_reachable"] = qdrant_ok
+                if not qdrant_ok:
+                    info.update(status="degraded", points=0, collection_exists=False,
+                                error=f"Qdrant 不可达：{store.url}")
+                    # 用 503 让调用方（健康检查/自检脚本）能直接判失败
+                    return self._send(503, info)
                 try:
-                    n = svc.pipe.store.count()
-                except Exception:
-                    pass
-                return self._send(200, {"status": "ok", "points": n,
-                                        "collection": svc.pipe.cfg.collection})
+                    store.info()
+                    info["collection_exists"] = True
+                    info["points"] = store.count()
+                    info["status"] = "ok"
+                    return self._send(200, info)
+                except Exception as e:
+                    info.update(status="degraded", points=0, collection_exists=False,
+                                error=f"集合 {store.collection} 不存在或不可读：{str(e)[:160]}")
+                    return self._send(503, info)
 
             # GET 版检索：给 Dify 的 HTTP 请求节点用。
             # 为什么需要它：Dify 的 JSON body 是把变量**原样**塞进 JSON 字符串模板，

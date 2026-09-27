@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +25,76 @@ from pathlib import Path
 from ..models import Block, BlockType
 
 MINERU_API = "https://mineru.net/api/v4"
+
+
+# ---------------------------------------------------------------------------
+# 裸 HTTP：需要**完全控制请求头**时用（urllib 会自作主张加 Content-Type）
+# ---------------------------------------------------------------------------
+def _raw_request(method: str, url: str, body: bytes | None = None,
+                 headers: dict | None = None, timeout: int = 300,
+                 use_proxy: bool = True) -> tuple[int, bytes]:
+    """
+    用 http.client 发请求，返回 (status, body)。
+
+    为什么不用 urllib：`AbstractHTTPHandler.do_request_` 在带 body 时会**自动**
+    加 `Content-Type: application/x-www-form-urlencoded`。而 MinerU 的 OSS 上传链接
+    是预签名的，多带任何头都会 403。http.client 不会自作主张。
+    """
+    import http.client
+    import ssl
+    from urllib.parse import urlsplit
+
+    u = urlsplit(url)
+    ctx = ssl.create_default_context()
+    if u.scheme == "https":
+        conn = http.client.HTTPSConnection(u.netloc, timeout=timeout, context=ctx)
+    else:
+        conn = http.client.HTTPConnection(u.netloc, timeout=timeout)
+    try:
+        path = u.path + (f"?{u.query}" if u.query else "")
+        conn.putrequest(method, path, skip_accept_encoding=True)
+        for k, v in (headers or {}).items():
+            conn.putheader(k, v)
+        if body is not None:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders()
+        if body:
+            conn.send(body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def _download_direct(url: str, dest: Path, timeout: int = 600) -> bool:
+    """
+    下载结果包。**不走代理**先试一次 —— 某些代理会让 CDN 的 TLS 握手失败
+    （实测 `SSL: UNEXPECTED_EOF_WHILE_READING`），直连反而正常。
+    """
+    import os
+    saved = {k: os.environ.pop(k, None)
+             for k in ("http_proxy", "https_proxy", "all_proxy",
+                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")}
+    try:
+        status, data = _raw_request("GET", url, timeout=timeout)
+        if status == 200 and data:
+            dest.write_bytes(data)
+            return True
+    except Exception:
+        pass
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+    # 直连失败 → 退回走代理
+    try:
+        status, data = _raw_request("GET", url, timeout=timeout)
+        if status == 200 and data:
+            dest.write_bytes(data)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +172,8 @@ class MinerUAPI:
 
     注意两个坑：
       · 申请到的 OSS 上传链接 PUT 时**不能带 Content-Type**，
-        `urllib` 会自动加 `application/x-www-form-urlencoded` 导致 403 —— 这里用 curl。
+        `urllib` 会自动加 `application/x-www-form-urlencoded` 导致 403 —— 所以用
+        `http.client` 裸发（不依赖系统里的 curl，容器镜像里没有）。
       · 结果 zip 在 `cdn-mineru.openxlab.org.cn`，某些代理会 TLS 握手失败，
         需要直连（`--noproxy`）。
     """
@@ -140,12 +210,11 @@ class MinerUAPI:
             raise RuntimeError(f"申请上传失败: {json.dumps(st, ensure_ascii=False)[:300]}")
         batch_id, url = st["data"]["batch_id"], st["data"]["file_urls"][0]
 
-        cp = subprocess.run(
-            ["curl", "-s", "-X", "PUT", "-H", "Content-Type:",
-             "--data-binary", f"@{pdf}", "-o", "/dev/null", "-w", "%{http_code}", url],
-            capture_output=True, text=True)
-        if cp.stdout.strip() != "200":
-            raise RuntimeError(f"上传失败 HTTP {cp.stdout.strip()}")
+        # 关键：**不要**带 Content-Type（预签名 URL 会因此 403）
+        status, _ = _raw_request("PUT", url, body=pdf.read_bytes(),
+                                 headers={}, timeout=600)
+        if status != 200:
+            raise RuntimeError(f"上传失败 HTTP {status}")
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -164,14 +233,8 @@ class MinerUAPI:
     @staticmethod
     def _download(zip_url: str, out: Path) -> Path:
         zpath = out / "_result.zip"
-        # 部分代理会对该 CDN 造成 TLS 握手失败，优先直连
-        for extra in (["--noproxy", "*"], []):
-            cp = subprocess.run(["curl", "-s", "--http1.1", *extra, "-o", str(zpath), zip_url],
-                                capture_output=True, text=True)
-            if zpath.exists() and zpath.stat().st_size > 0:
-                break
-        if not zpath.exists() or zpath.stat().st_size == 0:
-            raise RuntimeError("结果包下载失败（可能是代理问题，试 --noproxy）")
+        if not _download_direct(zip_url, zpath):
+            raise RuntimeError("结果包下载失败（可能是代理问题；本模块会先试直连再走代理）")
         with zipfile.ZipFile(zpath) as z:
             z.extractall(out)
         zpath.unlink(missing_ok=True)

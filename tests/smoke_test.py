@@ -189,19 +189,24 @@ def main() -> int:
                     {"knowledge_id": "", "query": "",
                      "retrieval_setting": {"top_k": 1, "score_threshold": 0.0}},
                     {"Authorization": f"Bearer {token}"})
-    check("空 query 探测返回空 records",
-          st == 200 and isinstance(body, dict) and body.get("records") == [], f"HTTP {st}")
-    st, _ = http(f"{base}/v1/retrieval", {"query": "x"},
-                 {"Authorization": "Bearer WRONG-TOKEN"})
-    check("错误 token 返回 403", st == 403, f"HTTP {st}")
-    st, body = http(f"{base}/v1/retrieval",
-                    {"knowledge_id": "mmkb", "query": "接地保护",
-                     "retrieval_setting": {"top_k": 1, "score_threshold": 0.0}},
-                    {"Authorization": f"Bearer {token}"})
-    rec = (body or {}).get("records") or []
-    check("正常查询返回契约结构", st == 200 and rec and
-          all(k in rec[0] for k in ("content", "score", "title", "metadata")),
-          f"{len(rec)} 条")
+    # 适配器是**可选**的：没挂载时是 404，这时跳过而不是判失败
+    if st == 404:
+        print("  ·  Dify 适配器未挂载（服务启动时没加 --enable-dify-adapter "
+              "或 MMKB_ENABLE_DIFY_ADAPTER=1），跳过这 3 项")
+    else:
+        check("空 query 探测返回空 records",
+              st == 200 and isinstance(body, dict) and body.get("records") == [], f"HTTP {st}")
+        st, _ = http(f"{base}/v1/retrieval", {"query": "x"},
+                     {"Authorization": "Bearer WRONG-TOKEN"})
+        check("错误 token 返回 403", st == 403, f"HTTP {st}")
+        st, body = http(f"{base}/v1/retrieval",
+                        {"knowledge_id": "mmkb", "query": "接地保护",
+                         "retrieval_setting": {"top_k": 1, "score_threshold": 0.0}},
+                        {"Authorization": f"Bearer {token}"})
+        rec = (body or {}).get("records") or []
+        check("正常查询返回契约结构", st == 200 and rec and
+              all(k in rec[0] for k in ("content", "score", "title", "metadata")),
+              f"{len(rec)} 条")
 
     print("\n" + "=" * 70)
     print("8) Open WebUI 适配器（确定性图片区块）")

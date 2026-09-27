@@ -64,5 +64,14 @@ clean:           ## 清缓存（图片描述 / 向量缓存 / pycache）
 
 distclean:       ## 清空所有运行时数据（向量库 + 解析产物 + 缓存）
 	@read -p "会删掉 data/ 下全部数据，确认？(yes/N) " a; [ "$$a" = "yes" ] || exit 1
-	rm -rf data/qdrant/* data/work/* data/parsed/*
+	-@cd deploy && docker compose down 2>/dev/null || true
+	# Qdrant 官方镜像只能以 root 运行，它写的 data/qdrant 是 root 属主，
+	# 宿主机直接 rm 会 Permission denied —— 借一次性容器来删。
+	@if [ -d data/qdrant ] && [ ! -w data/qdrant ]; then \
+	  echo "  data/qdrant 属主是 root，用容器清理…"; \
+	  docker run --rm -v "$$PWD/data:/d" alpine sh -c "rm -rf /d/qdrant/* /d/qdrant/.[!.]* 2>/dev/null; chown -R $$(id -u):$$(id -g) /d" ; \
+	else \
+	  rm -rf data/qdrant/* 2>/dev/null || true; \
+	fi
+	@rm -rf data/work/* data/parsed/* 2>/dev/null || true
 	@echo "已清空运行时数据"

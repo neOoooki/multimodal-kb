@@ -185,6 +185,29 @@ python3 integrations/dify/dify_http_node_chatflow.py \
     --search-url http://172.17.0.1:8088/search
 ```
 
+### 2.1b Docker 部署下启用适配器（可选）
+
+镜像里已带 `integrations/`，用环境变量开关：
+
+```bash
+# deploy/.env
+MMKB_ENABLE_DIFY_ADAPTER=1
+MMKB_ADAPTER_TOKEN=change-me      # 建议设一个，Dify 注册时会带上
+```
+
+然后 `docker compose up -d mmkb`。
+
+验证：
+
+```bash
+curl -X POST localhost:8088/v1/retrieval \
+  -H 'Authorization: Bearer change-me' -H 'Content-Type: application/json' \
+  -d '{"knowledge_id":"mmkb","query":"测试","retrieval_setting":{"top_k":1,"score_threshold":0}}'
+```
+
+> 不过**仍然推荐用 HTTP 请求节点**（2.1 节）：
+> 它的返回结构更丰富，而且不受 Dify 外部数据集那套隐式约束影响。
+
 ### 2.2 备选：外部知识库（有坑，不建议）
 
 如果你坚持用 Dify 的「外部知识库」，至少要知道这些：

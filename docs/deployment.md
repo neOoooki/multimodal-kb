@@ -284,10 +284,49 @@ curl -s localhost:8088/health
 
 ### 6.1 目录权限：`Permission denied: .../data/work`
 
-Docker 以 root 建了 `data/`。修：
+**两种成因，都要处理：**
+
+**① `data/` 被 Docker 以 root 预建**（挂 Qdrant 卷时）。
+`deploy.sh` 已经会先用你的用户建好目录，手动部署请照做。已经踩到了就修：
 
 ```bash
 docker run --rm -v "$PWD/data:/d" alpine chown -R $(id -u):$(id -g) /d
+```
+
+**② 容器以 root 运行，在挂载目录写下 root 属主的文件。**
+这会让宿主机侧 `kb ingest` 和 `make distclean` 失败。
+
+已在 `docker-compose.yml` 里给检索服务设了非 root 用户：
+
+```yaml
+user: "${MMKB_UID:-1000}:${MMKB_GID:-1000}"
+```
+
+`deploy.sh` 会 `export MMKB_UID=$(id -u) MMKB_GID=$(id -g)`。
+**手动用 compose 时要自己导出**，否则会退化成 1000:1000：
+
+```bash
+export MMKB_UID=$(id -u) MMKB_GID=$(id -g)
+docker compose up -d
+```
+
+> **Qdrant 官方镜像无法以非 root 启动**（会 panic），所以它的
+> `data/qdrant` 仍是 root 属主。`make distclean` 已经用一次性容器来清理，
+> 手动删的话也要绕一下：
+> ```bash
+> docker run --rm -v "$PWD/data:/d" alpine rm -rf /d/qdrant/*
+> ```
+
+### 6.1b 宿主机 `kb` 命令提示缺少 API Key
+
+`kb` 启动器**会自动读 `./.env` 和 `./deploy/.env`**（已存在的环境变量不覆盖）。
+如果还报缺少 key，说明两个文件都没有：
+
+```bash
+# 确认一下
+./kb doctor | head -20
+# 或手动加载
+set -a; . deploy/.env; set +a
 ```
 
 ### 6.2 服务的 `/health` 一直不通

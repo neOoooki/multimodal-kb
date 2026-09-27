@@ -31,6 +31,10 @@ services:
     image: mmkb/service:latest
     container_name: mmkb-service
     restart: unless-stopped
+    # 以宿主用户身份运行：否则容器写的 data/work/*.json 会是 root 属主，
+    # 导致宿主机侧跑 kb ingest 或 make distclean 时 Permission denied。
+    # （Qdrant 官方镜像不支持非 root 启动，那边只能靠 chown 兜底）
+    user: "${MMKB_UID:-1000}:${MMKB_GID:-1000}"
     ports:
       - "${MMKB_PORT:-8088}:8088"
     env_file:
@@ -42,6 +46,9 @@ services:
       MMKB_PUBLIC_URL: ${MMKB_PUBLIC_URL:-http://localhost:8088}
       MMKB_WORK_DIR: /data/work
       MMKB_PARSED_DIR: /data/parsed
+      # 设为 1 则挂载 Dify 外部知识库接口 /v1/retrieval（镜像里已带 integrations/）
+      MMKB_ENABLE_DIFY_ADAPTER: ${MMKB_ENABLE_DIFY_ADAPTER:-0}
+      MMKB_ADAPTER_TOKEN: ${MMKB_ADAPTER_TOKEN:-}
     volumes:
       - ../data:/data
     depends_on:
