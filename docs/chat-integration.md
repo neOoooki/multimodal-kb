@@ -23,7 +23,7 @@ MaxKB 官方文档甚至教用户在提示词里补一句"对于已知信息中�
 
 推荐顺序：
 
-1. **Open WebUI + Pipe Function** —— ✅ 确定性注入，已验证
+1. **Open WebUI + Filter Function** —— ✅ 模型总结 + 图片确定性注入，已验证
 2. **Dify + HTTP 请求节点** —— ⚠️ 可行，但图片要过 LLM，见第 2 节
 3. **自己的前端** —— 直接调 `/search`，最自由
 
@@ -39,7 +39,7 @@ cd deploy
 # Open WebUI 在 http://localhost:3000
 ```
 
-`--with-chat` 会把 **Pipe Function 一起装好**（1.2 那一步不用手动做）：
+`--with-chat` 会把 **Filter Function 一起装好**（1.2 那一步不用手动做）：
 起 compose 的 `chat` profile → 建/登录管理员 → 注册并启用 Function → 自检里多两条断言。
 
 或手动（注意 `MMKB_SEARCH_URL` 用宿主 IP 或服务名，**不能用 localhost**）：
@@ -59,7 +59,7 @@ docker run -d --name mmkb-openwebui-manual --restart unless-stopped \
 > `MMKB_SEARCH_URL` 是**容器视角**的地址。容器里的 `localhost` 是它自己，
 > 所以要用宿主 IP（Linux 下通常是 `172.17.0.1`）或者 compose 服务名。
 
-### 1.2 装 Pipe Function
+### 1.2 装 Filter Function
 
 ```bash
 # 在仓库根目录跑（compose 部署时 OWUI_URL 默认就是 localhost:3000）
@@ -68,11 +68,13 @@ python3 integrations/openwebui/install_owui_function.py
 
 脚本会：
 1. 登录管理员；没有账号就注册（**Open WebUI 的第一个用户自动是 admin**）
-2. 把 `pipe.py` 注册成 Function（**已存在则更新内容**，重复执行安全）
-3. 确保它是启用状态，并回读一次验证（含"模型下拉里能否看到"）
+2. 把 `filter.py` 注册成 **filter 类型** Function（已存在则更新，重复执行安全）
+3. 确保它启用、并设为**全局**（否则要在每个模型的设置里单独勾选）
+4. 删掉旧的 Pipe（如果之前装过），免得模型下拉里留着一个"检索结果展示器"
 
 可覆盖的环境变量：`OWUI_URL`、`OWUI_ADMIN_EMAIL`（默认 `admin@mmkb.local`）、
-`OWUI_ADMIN_PASS`（默认 `Mmkb@2026`）、`OWUI_FUNCTION_ID`（默认 `mmkb`）。
+`OWUI_ADMIN_PASS`（默认 `Mmkb@2026`）、`OWUI_FUNCTION_ID`（默认 `mmkb_rag`）。
+加 `--keep-pipe` 可保留旧 Pipe。
 已有别的管理员账号时，用它来指定即可：
 
 ```bash
@@ -81,33 +83,59 @@ OWUI_ADMIN_EMAIL=you@example.com OWUI_ADMIN_PASS='你的密码' \
 ```
 
 手动装：Open WebUI → 右上角头像 → **管理员设置 → 函数 → 新建函数**，
-把 `integrations/openwebui/pipe.py` 的内容粘进去，保存并启用。
+把 `integrations/openwebui/filter.py` 的内容粘进去，类型选 **Filter**，保存并启用。
 
 > Open WebUI 的 in-process Function 存在**它自己的数据库**里，只能通过它的 API/管理界面注册 ——
 > 把文件丢进容器的 `data/functions/` 目录是不生效的。
 
 ### 1.3 用
 
-打开 <http://localhost:3000>，模型下拉里选 **「多模态知识库」**，直接提问。
+打开 <http://localhost:3000>，在**模型下拉里选一个真实模型**（如 `qwen-plus`），直接提问。
+
+> 注意：Filter **不会**出现在模型下拉里 —— 它挂在所选模型上工作。
+> 如果下拉里还能看到「多模态知识库」，那是没清掉的旧 Pipe，选它会绕过 LLM。
 
 ### 1.4 它做了什么
 
-`pipe.py` 里的 `pipe()` 是异步生成器，逐段 `yield` 文本，Open WebUI 按 Markdown 渲染：
+**为什么是 Filter 而不是 Pipe** —— 这两类 Function 语义完全不同：
+
+| | Pipe | Filter |
+| --- | --- | --- |
+| 形态 | 在模型下拉里**冒充一个模型** | 挂在真实模型上，请求前后各插一脚 |
+| 是否经过 LLM | ❌ **完全绕过** | ✅ 由所选模型生成回答 |
+| 用户看到 | 检索原文堆砌（"检索结果展示器"） | 模型总结后的通顺回答 |
+| 图片 | 代码写进流，一定出现 | `outlet` 里代码追加，同样一定出现 |
+
+Pipe 能保证图片，但代价是**没有总结提炼** —— 那就退化成检索工具了。
+Filter 两样都要：
 
 ```python
-async def pipe(self, body, __user__=None, __event_emitter__=None):
-    query = 取最后一条 user 消息
-    hits = self._search(query)            # 调我们的 /search
-    
-    yield "**检索到的相关内容**\n\n"
-    yield self.build_context(hits)         # 正文里已含 ![](图片URL)
-    
-    img_block = self.build_image_block(hits)   # 补上正文没覆盖到的图
-    if img_block:
-        yield img_block                    # ★ 由代码追加，不经过 LLM
+async def inlet(self, body, __user__=None, __event_emitter__=None, __metadata__=None):
+    hits = self._search(取最后一条 user 消息)   # 调我们的 /search
+    # ① 资料注入 system 提示 → 模型据此总结
+    #    注入前剥掉 ![]() 图片语法：图片交给 outlet 统一追加，
+    #    免得同一张图出现两遍，也免得模型把它当正文复述
+    messages.insert(0, {"role": "system", "content": SYSTEM_TEMPLATE.format(
+        context=self.build_context(hits))})
+    # ② 命中图片存进 metadata，供 outlet 取用
+    __metadata__["mmkb_images"] = self.collect_images(hits)
+    return body
+
+async def outlet(self, body, __user__=None, __metadata__=None):
+    block = self.build_image_block(__metadata__.get("mmkb_images") or [])
+    # ★ 由代码追加到回答末尾，不经过 LLM
+    ...
 ```
 
-**关键点**：图片是**代码写进流的**，不是 LLM 生成的。这是与 Dify 路线的本质区别。
+**关键点**：文字由模型组织，**图片由代码保证**。
+
+共享数据走 `__metadata__`：Open WebUI 会把**同一个 metadata 字典**分别传给
+`inlet` 和 `outlet`（见 `utils/middleware.py` 两处 `extra_params`），
+比用模块级全局变量可靠（插件模块是按请求缓存的）。
+
+> **踩过的坑**：assistant 消息**同时有 `content`（纯文本）和 `output`（结构化 parts）**，
+> 而前端**优先渲染 `output`**。只往 `content` 追加的话，数据库里有图、界面上看不到 ——
+> 必须两处都写。
 
 ### 1.5 两个必须知道的坑
 
@@ -119,39 +147,49 @@ async def pipe(self, body, __user__=None, __event_emitter__=None):
 **坑 2：不要用它的 "External Knowledge" 连接**
 
 `EXTERNAL_KNOWLEDGE_PROVIDERS` 只支持 `qdrant` / `milvus` / `pgvector`
-**直连向量库**，不是任意 HTTP 检索 API。要用 Pipe Function。
+**直连向量库**，不是任意 HTTP 检索 API。要用 Function。
 
 ### 1.6 验证
 
-仓库里带了端到端验证脚本，**验的不是"容器起来了"，而是这条链路真的通**：
+仓库里带了端到端验证脚本，**验的不是"容器起来了"，而是这条链路真的按设计工作**：
 
 ```bash
 python3 integrations/openwebui/verify_integration.py
-# 默认问「万用表怎么用？」，可用 Q="..." 覆盖
+# 默认问「色环电阻怎么读数？」，可用 Q="..." MODEL="..." 覆盖
 ```
 
-它做四类断言：
+它做五类断言：
 
-1. Open WebUI 在跑、Function 已装且已启用
-2. 通过 `/api/chat/completions`（`model=mmkb`）走一遍 pipe，拿到非空回答
-3. 回答里**不含**原始 `<img>`（Open WebUI 只渲染 `![]()`）
-4. 检索服务为该问题命中的**每一张图**都出现在回答里，且 URL 真能取到（HTTP 200）
+1. 检索服务在跑，且能算出"这个问题应该出现哪几张图"
+2. Filter 已装、已启用、已设为全局，**且类型确实是 `filter`**
+   （类型错了 Open WebUI 根本不会在生成前后调用它）
+3. 走一遍真实模型的对话，拿到非空回答
+4. **回答是"总结"而不是"检索原文堆砌"** —— 回答里不应出现检索服务的分块标记
+   （`【章节路径】`、`**检索到的相关内容**`）。这条最要紧：它是"退化成 Pipe"的哨兵
+5. 用同一个问题跑 `filter.py` 的图片收集逻辑，命中的图都能拼成 Markdown，且 URL 可直连
 
-第 4 条就是"确定性注入"的核心契约。实测输出：
+实测输出：
 
 ```
-1/4 检索服务       ✅ /search 返回 5 条   ✅ 该问题命中 1 张图
-2/4 Open WebUI     ✅ 已登录   ✅ Function「多模态知识库」已安装且已启用
-3/4 走 pipe        ✅ 拿到回答（1285 字）  ✅ 回答里没有原始 <img>
-4/4 确定性图片注入  ✅ 命中的 1 张图全部出现在回答里
-                   ✅ 回答里 1 个图片 URL 全部可直连（HTTP 200）
-  通过 8 项 —— Open WebUI 集成链路通 ✅
+1/5 检索服务            ✅ /search 返回 5 条
+2/5 Open WebUI Filter  ✅ 已登录  ✅ 类型正确  ✅ 已启用  ✅ 已设为全局
+3/5 通过真实模型提问     ✅ 拿到回答（1992 字）
+4/5 回答形态            ✅ 没有检索原文分块标记（经过模型组织）
+                       ✅ 没有原始 <img>，用的是 Markdown 图片语法
+5/5 确定性图片注入       ✅ 命中的 1 张图能拼成 Markdown 区块
+                       ✅ 1 个图片 URL 可直连（HTTP 200）
+  通过 10 项 —— Open WebUI 集成链路通 ✅
 ```
 
-> 这条链路曾用无头 Chromium 做过浏览器侧实测（图片确实渲染、无 Markdown 字面量残留），
-> 截图见 [evidence/openwebui_rendered.png](evidence/openwebui_rendered.png)
-> —— 电路图、LaTeX 公式、章节路径引用都正常。
-> 上面的脚本是它的**可重复版本**（不依赖浏览器，CI 友好）。
+关于第 5 条的范围：图片在 `outlet` 里追加，而 Open WebUI 只对**已保存的会话**把
+outlet 结果落库（需要 `metadata.message_id`，直接调 API 的临时会话没有这个字段）。
+所以脚本验证"确定性拼装 + URL 可达"这部分自动化得了的，
+**界面上图片真的渲染出来**则由下面的浏览器截图佐证：
+
+![Open WebUI 渲染效果](evidence/openwebui_rendered.png)
+
+> 上图是一台无头 Chromium 实拍的浏览器画面：`qwen-plus` 基于检索资料总结出
+> 带表格的完整回答，末尾「相关插图」是教材原图（1265px，来自检索服务）。
 
 ---
 
