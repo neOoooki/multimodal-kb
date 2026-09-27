@@ -328,6 +328,59 @@ workflow 检索节点把它传给外部服务时是 `None`，
 
 ---
 
+### 2.4 模型选择与视觉能力
+
+**模型怎么选**（`app → 编排 → LLM 节点`）：
+
+| 模型 | 视觉 | 输出 | 适合 |
+| --- | --- | --- | --- |
+| `qwen-plus`（tongyi） | ❌ | 干净，无额外标记 | 纯文本问答，演示最省心 |
+| `deepseek-v4-flash-vision-exp` | ✅ | 带 `<think>` 推理块 | 需要模型真读图时 |
+
+**关于 `<think>`**：deepseek 插件会把思维链包成
+`<think><!--dify-deepseek-reasoning-->…</think>` 内联进 `answer` 字段。
+**直接调 API 会看到这一大段推理原文**，但 **Dify 前端不显示它**（实测浏览器画面里
+既没有 `<think>` 也没有 marker）。所以只影响用 API 取答案的脚本，
+不影响界面观感 —— 脚本侧要自己剥掉。
+
+**让视觉真正可用**，三处必须同时配好，缺一不可：
+
+1. **应用功能 → 文件上传**：`features.file_upload.enabled = true`，类型 `image`
+2. **开始节点**要能拿到文件（chatflow 用内置的 `sys.files`，不用自己加变量）
+3. **LLM 节点 → 视觉**：`vision.enabled = true`，
+   `vision.configs.variable_selector = ["sys", "files"]`
+
+只换模型不配第 3 条，图片永远进不了模型 —— 这是最容易漏的一步。
+
+> **注意草稿与已发布是两份数据**。改完要么在界面上点「发布」，要么调
+> `POST /console/api/apps/{id}/workflows/publish`；只改草稿不发布，
+> 线上跑的还是旧配置。反过来，在编排界面里改完忘了发布，也会出现
+> "数据库里是新的、跑起来是旧的"。
+
+验证视觉链路（上传一张教材插图再提问）：
+
+```bash
+KEY=<应用 API Key>
+# 1. 上传
+curl -s -X POST localhost/v1/files/upload \
+  -H "Authorization: Bearer $KEY" \
+  -F 'file=@book_img.jpg' -F 'user=demo'
+# 2. 带图提问（upload_file_id 用上一步返回的 id）
+curl -s -X POST localhost/v1/chat-messages \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"inputs":{},"query":"这张图里的表格是做什么用的？",
+       "response_mode":"blocking","user":"demo",
+       "files":[{"type":"image","transfer_method":"local_file",
+                 "upload_file_id":"<上一步的 id>"}]}'
+```
+
+实测：上传教材里的色环参数表后提问，模型正确定位到「表 2-1-4 色标法中各种色环
+颜色代表的参数含义」并说出四列含义（有效数值 / 倍率 / 误差范围 / 温度系数）。
+
+> 检索回来的插图（HTTP 节点返的 Markdown 图片 URL）**进不了视觉** —— LLM 节点
+> 只能吃到文本。要让模型看检索到的图，得先把 URL 下载成文件再作为 `files` 传入，
+> 目前没做。
+
 ## 3. 自己写前端 / 接任意应用
 
 直接用 HTTP 接口即可，没有任何框架依赖。
