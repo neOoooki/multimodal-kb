@@ -26,6 +26,8 @@ _verify/
 node_modules/
 *.png
 !docs/evidence/*.png
+# 结题报告图表（Markdown 直接引用）
+!docs/report/figures/*.png
 # 样例 PDF 是生成的（见 tests/fixtures/README.md），CI 里现算现用
 tests/fixtures/sample-2p.pdf
 

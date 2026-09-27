@@ -1,0 +1,9 @@
+# LaTeX 中间文件（保留源码与最终 PDF）
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+pass*.log
