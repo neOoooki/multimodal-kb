@@ -1,0 +1,524 @@
+# =============================================================================
+# Dify 多模态知识流水线 · 基础模板
+# -----------------------------------------------------------------------------
+# 适用版本 : Dify 1.17.x（Knowledge Pipeline，DSL 0.1.0，kind: rag_pipeline）
+# 流水线   : 文件上传 → 多模态提取(文本+内嵌图片) → 通用分块 → 知识库索引(视觉向量)
+# -----------------------------------------------------------------------------
+# 多模态原理（重要）:
+#   1. Dify Extractor 解析 PDF/PPTX 时，会把文档内嵌图片抽出来上传到 Dify 存储，
+#      并在正文中以 Markdown 图片链接 ![](/files/<id>/file-preview) 的形式插回。
+#   2. 通用分块把正文切块，图片链接自然保留在对应块内。
+#   3. 知识库索引节点只要使用「带 vision 特性的 embedding 模型」，Dify 就会把
+#      dataset.is_multimodal 置为 True，并调用 vector.create_multimodal()，
+#      把图片和文本一起编码进同一个向量空间。
+#   所以：多模态能力 = 支持抽图的提取器 + 视觉 embedding 模型，两者缺一不可。
+# -----------------------------------------------------------------------------
+# 依赖插件（import 时会自动校验/提示安装）:
+#   - langgenius/dify_extractor   0.1.1   （多模态提取器，抽文本 + 文档内嵌图片）
+#   - langgenius/general_chunker  0.0.14  （通用文本分块）
+#   - langgenius/tongyi           0.2.22  （视觉 embedding，本模板用 multimodal-embedding-v1）
+# =============================================================================
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/dify_extractor:0.1.1@e9767479e2a3817963132ed39d6fbd5ed61c204c2db574d2292cf1fc663db487
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/general_chunker:0.0.14@ea3f9798477cfc7c33eb7e93a8c3f2490ba30e410ed9eca20d6b3838bfc9ad4b
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/tongyi:0.2.22@9cea96ffc7977f536c02999c80ff1283b1819aab9b6fa2fdf789d0c6c7d03715
+    version: null
+kind: rag_pipeline
+rag_pipeline:
+  name: 多模态知识库-基础版
+  description: 文件 → 多模态提取(文本+图片) → 文本分块 → 视觉向量索引
+  icon: 📙
+  icon_type: emoji
+  icon_background: '#FFF4ED'
+  icon_url: null
+version: 0.1.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: datasource
+        targetType: tool
+      id: 1763000000001-source-1763000000002-target
+      source: '1763000000001'
+      sourceHandle: source
+      target: '1763000000002'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1763000000002-source-1763000000003-target
+      source: '1763000000002'
+      sourceHandle: source
+      target: '1763000000003'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: knowledge-index
+      id: 1763000000003-source-1763000000004-target
+      source: '1763000000003'
+      sourceHandle: source
+      target: '1763000000004'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    # ---------------------------------------------------------------------
+    # 节点 1/4 · 数据源：文件上传
+    #   fileExtensions 已按 Dify Extractor 0.1.1 实际支持的格式对齐，
+    #   避免出现「允许上传但解析失败」的格式。
+    # ---------------------------------------------------------------------
+    - data:
+        datasource_configurations: {}
+        datasource_label: File
+        datasource_name: upload-file
+        datasource_parameters: {}
+        fileExtensions:
+        - pdf
+        - docx
+        - pptx
+        - xls
+        - xlsx
+        - csv
+        - md
+        - markdown
+        - mdx
+        - html
+        - htm
+        - json
+        - yaml
+        - yml
+        - xml
+        - txt
+        plugin_id: langgenius/file
+        provider_name: file
+        provider_type: local_file
+        selected: false
+        title: 文件上传
+        type: datasource
+      height: 52
+      id: '1763000000001'
+      position:
+        x: -820
+        y: 300
+      positionAbsolute:
+        x: -820
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    # ---------------------------------------------------------------------
+    # 节点 2/4 · 多模态提取：Dify Extractor
+    #   输出 documents（含 Markdown 图片链接的正文）+ images（抽出的图片文件）
+    # ---------------------------------------------------------------------
+    - data:
+        is_team_authorization: true
+        output_schema:
+          properties:
+            documents:
+              description: the documents extracted from the file
+              items:
+                type: object
+              type: array
+            images:
+              description: the images extracted from the file
+              items:
+                type: object
+              type: array
+          type: object
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: the file to parse (supports PDF, Office, Markdown, HTML, CSV, JSON,
+              YAML, and plain text files)
+            zh_Hans: 用于解析的文件 (支持 pdf, docx, pptx, xls, xlsx, csv, md, markdown,
+              mdx, htm, html, json, yaml, yml, xml 和纯文本)
+          label:
+            en_US: file
+            zh_Hans: file
+          llm_description: the file to parse (supports PDF, Office, Markdown, HTML,
+            CSV, JSON, YAML, and plain text files)
+          max: null
+          min: null
+          name: file
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: file
+        params:
+          file: ''
+        provider_id: langgenius/dify_extractor/dify_extractor
+        provider_name: langgenius/dify_extractor/dify_extractor
+        provider_type: builtin
+        selected: false
+        title: 多模态提取
+        tool_configurations: {}
+        tool_description: Dify Extractor
+        tool_label: Dify Extractor
+        tool_name: dify_extractor
+        tool_parameters:
+          file:
+            type: variable
+            value:
+            - '1763000000001'
+            - file
+        type: tool
+      height: 52
+      id: '1763000000002'
+      position:
+        x: -440
+        y: 300
+      positionAbsolute:
+        x: -440
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    # ---------------------------------------------------------------------
+    # 节点 3/4 · 通用分块：General Chunker
+    #   分块参数来自流水线共享变量 (rag.shared.*)，可在运行面板统一调整
+    # ---------------------------------------------------------------------
+    - data:
+        is_team_authorization: true
+        output_schema:
+          properties:
+            result:
+              description: The result of the general chunk tool.
+              properties:
+                general_chunks:
+                  items:
+                    description: The chunk of the text.
+                    type: string
+                  type: array
+              type: object
+          type: object
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The text you want to chunk.
+            zh_Hans: 你想要分块的文本。
+          label:
+            en_US: Input Variable
+            zh_Hans: 输入变量
+          llm_description: The text you want to chunk.
+          max: null
+          min: null
+          name: input_variable
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The delimiter of the chunks.
+            zh_Hans: 块的分隔符。
+          label:
+            en_US: Delimiter
+            zh_Hans: 分隔符
+          llm_description: The delimiter of the chunks, the format of the delimiter
+            must be a string.
+          max: null
+          min: null
+          name: delimiter
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The maximum chunk length.
+            zh_Hans: 最大块的长度。
+          label:
+            en_US: Maximum Chunk Length
+            zh_Hans: 最大块的长度
+          llm_description: The maximum chunk length, the format of the chunk size
+            must be an integer.
+          max: null
+          min: null
+          name: max_chunk_length
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The chunk overlap length.
+            zh_Hans: 块的重叠长度。
+          label:
+            en_US: Chunk Overlap Length
+            zh_Hans: 块的重叠长度
+          llm_description: The chunk overlap length, the format of the chunk overlap
+            length must be an integer.
+          max: null
+          min: null
+          name: chunk_overlap_length
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: Replace consecutive spaces, newlines and tabs
+            zh_Hans: 替换连续的空格、换行符和制表符
+          label:
+            en_US: Replace Consecutive Spaces, Newlines and Tabs
+            zh_Hans: 替换连续的空格、换行符和制表符
+          llm_description: Replace consecutive spaces, newlines and tabs, the format
+            of the replace must be a boolean.
+          max: null
+          min: null
+          name: replace_consecutive_spaces_newlines_tabs
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: Delete all URLs and email addresses
+            zh_Hans: 删除所有URL和电子邮件地址
+          label:
+            en_US: Delete All URLs and Email Addresses
+            zh_Hans: 删除所有URL和电子邮件地址
+          llm_description: Delete all URLs and email addresses, the format of the
+            delete must be a boolean.
+          max: null
+          min: null
+          name: delete_all_urls_and_email_addresses
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        params:
+          chunk_overlap_length: ''
+          delete_all_urls_and_email_addresses: ''
+          delimiter: ''
+          input_variable: ''
+          max_chunk_length: ''
+          replace_consecutive_spaces_newlines_tabs: ''
+        provider_id: langgenius/general_chunker/general_chunker
+        provider_name: langgenius/general_chunker/general_chunker
+        provider_type: builtin
+        selected: false
+        title: 通用分块
+        tool_configurations: {}
+        tool_description: A tool for general text chunking mode, the chunks retrieved
+          and recalled are the same.
+        tool_label: General Chunker
+        tool_name: general_chunker
+        tool_parameters:
+          chunk_overlap_length:
+            type: variable
+            value:
+            - rag
+            - shared
+            - chunk_overlap
+          delete_all_urls_and_email_addresses:
+            type: mixed
+            value: '{{#rag.shared.delete_urls_email#}}'
+          delimiter:
+            type: mixed
+            value: '{{#rag.shared.delimiter#}}'
+          input_variable:
+            type: mixed
+            value: '{{#1763000000002.text#}}'
+          max_chunk_length:
+            type: variable
+            value:
+            - rag
+            - shared
+            - max_chunk_length
+          replace_consecutive_spaces_newlines_tabs:
+            type: mixed
+            value: '{{#rag.shared.replace_consecutive_spaces#}}'
+        type: tool
+      height: 52
+      id: '1763000000003'
+      position:
+        x: -60
+        y: 300
+      positionAbsolute:
+        x: -60
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    # ---------------------------------------------------------------------
+    # 节点 4/4 · 知识库索引
+    #   embedding_model 必须是带 vision 特性的模型，多模态才生效。
+    #   本模板用通义 multimodal-embedding-v1（features: [vision]）。
+    #   换成纯文本模型（如 text-embedding-v4）则退化为普通文本知识库。
+    # ---------------------------------------------------------------------
+    - data:
+        chunk_structure: text_model
+        embedding_model: multimodal-embedding-v1
+        embedding_model_provider: langgenius/tongyi/tongyi
+        index_chunk_variable_selector:
+        - '1763000000003'
+        - result
+        indexing_technique: high_quality
+        keyword_number: 10
+        retrieval_model:
+          score_threshold: 0.5
+          score_threshold_enabled: false
+          search_method: semantic_search
+          top_k: 3
+          vector_setting:
+            embedding_model_name: multimodal-embedding-v1
+            embedding_provider_name: langgenius/tongyi/tongyi
+        selected: false
+        title: 知识库索引
+        type: knowledge-index
+      height: 114
+      id: '1763000000004'
+      position:
+        x: 320
+        y: 300
+      positionAbsolute:
+        x: 320
+        y: 300
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 500
+      y: 120
+      zoom: 0.7
+  rag_pipeline_variables:
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: \n\n
+    label: Delimiter
+    max_length: 100
+    options: []
+    placeholder: null
+    required: true
+    tooltips: A delimiter is the character used to separate text. \n\n is recommended
+      for splitting the original document into large parent chunks. You can also use
+      special delimiters defined by yourself.
+    type: text-input
+    unit: null
+    variable: delimiter
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: 1000
+    label: Maximum chunk length
+    max_length: 48
+    options: []
+    placeholder: null
+    required: true
+    tooltips: null
+    type: number
+    unit: characters
+    variable: max_chunk_length
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: 200
+    label: Chunk overlap
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: number
+    unit: characters
+    variable: chunk_overlap
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: true
+    label: Replace consecutive spaces, newlines and tabs
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: checkbox
+    unit: null
+    variable: replace_consecutive_spaces
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: false
+    label: Delete all URLs and email addresses
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: checkbox
+    unit: null
+    variable: delete_urls_email

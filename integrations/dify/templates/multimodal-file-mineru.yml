@@ -1,0 +1,622 @@
+# =============================================================================
+# Dify 多模态知识流水线 · MinerU OCR 变体
+# -----------------------------------------------------------------------------
+# 适用版本 : Dify 1.17.x（Knowledge Pipeline，DSL 0.1.0，kind: rag_pipeline）
+# 流水线   : 文件/图片 → MinerU 解析(OCR+公式+表格+图片) → 通用分块 → 视觉向量索引
+# -----------------------------------------------------------------------------
+# 与基础版的区别:
+#   - 提取器换成 MinerU，适合「扫描件 / 图片型 PDF / 纯图片」，可 OCR 并抽取版面图片
+#   - 数据源额外允许 png / jpg / jpeg 直接上传
+#   - tool_configurations 中默认开启 enable_ocr / enable_formula / enable_table
+#
+# 前置条件（重要）:
+#   MinerU 需要先在「设置 → 工具」里配置服务地址与令牌：
+#     server_type : local（自建 MinerU 服务） 或 remote（MinerU 官方 API）
+#     base_url    : MinerU 服务地址
+#     token       : 官方 API 需要，自建可留空
+#   未配置时流水线可以导入，但运行会失败。
+#
+# 依赖插件: langgenius/mineru 0.5.0 + langgenius/general_chunker 0.0.14 + langgenius/tongyi 0.2.22
+# =============================================================================
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/mineru:0.5.0@ca04f2dceb4107e3adf24839756954b7c5bcb7045d035dbab5821595541c093d
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/general_chunker:0.0.14@ea3f9798477cfc7c33eb7e93a8c3f2490ba30e410ed9eca20d6b3838bfc9ad4b
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/tongyi:0.2.22@9cea96ffc7977f536c02999c80ff1283b1819aab9b6fa2fdf789d0c6c7d03715
+    version: null
+kind: rag_pipeline
+rag_pipeline:
+  description: 文件/图片 → MinerU 解析(OCR+公式+表格+图片) → 文本分块 → 视觉向量索引
+  icon: 📙
+  icon_background: '#FFF4ED'
+  icon_type: emoji
+  icon_url: null
+  name: 多模态知识库-MinerU版
+version: 0.1.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: datasource
+        targetType: tool
+      id: 1763000000001-source-1763000000002-target
+      source: '1763000000001'
+      sourceHandle: source
+      target: '1763000000002'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: 1763000000002-source-1763000000003-target
+      source: '1763000000002'
+      sourceHandle: source
+      target: '1763000000003'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: knowledge-index
+      id: 1763000000003-source-1763000000004-target
+      source: '1763000000003'
+      sourceHandle: source
+      target: '1763000000004'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        datasource_configurations: {}
+        datasource_label: File
+        datasource_name: upload-file
+        datasource_parameters: {}
+        fileExtensions:
+        - pdf
+        - doc
+        - docx
+        - ppt
+        - pptx
+        - png
+        - jpg
+        - jpeg
+        plugin_id: langgenius/file
+        provider_name: file
+        provider_type: local_file
+        selected: false
+        title: 文件/图片上传
+        type: datasource
+      height: 52
+      id: '1763000000001'
+      position:
+        x: -820
+        y: 300
+      positionAbsolute:
+        x: -820
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        is_team_authorization: true
+        output_schema:
+          properties:
+            full_zip_url:
+              description: The zip URL of the complete parsed result
+              type: string
+            images:
+              description: The images extracted from the file
+              items:
+                type: object
+              type: array
+          type: object
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The file to be parsed (support pdf, ppt, pptx, doc, docx, png,
+              jpg, jpeg)
+            zh_Hans: 用于解析的文件(支持 pdf, ppt, pptx, doc, docx, png, jpg, jpeg)
+          label:
+            en_US: file
+            zh_Hans: file
+          llm_description: The file to be parsed (support pdf, ppt, pptx, doc, docx,
+            png, jpg, jpeg)
+          max: null
+          min: null
+          name: file
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: file
+        - auto_generate: null
+          default: null
+          form: form
+          human_description:
+            en_US: Parsing method, can be auto, ocr, or txt. Default is auto.
+            zh_Hans: 解析方法，可以是 auto、ocr 或 txt，默认 auto。
+          label:
+            en_US: parse_method
+            zh_Hans: parse_method
+          llm_description: Parsing method, can be auto, ocr, or txt. Default is auto.
+          max: null
+          min: null
+          name: parse_method
+          options:
+          - label:
+              en_US: auto
+              zh_Hans: auto
+            value: auto
+          - label:
+              en_US: ocr
+              zh_Hans: ocr
+            value: ocr
+          - label:
+              en_US: txt
+              zh_Hans: txt
+            value: txt
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: select
+        - auto_generate: null
+          default: null
+          form: form
+          human_description:
+            en_US: Whether to enable formula recognition
+            zh_Hans: 是否开启公式识别
+          label:
+            en_US: enable_formula
+            zh_Hans: enable_formula
+          llm_description: Whether to enable formula recognition
+          max: null
+          min: null
+          name: enable_formula
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        - auto_generate: null
+          default: null
+          form: form
+          human_description:
+            en_US: Whether to enable table recognition
+            zh_Hans: 是否开启表格识别
+          label:
+            en_US: enable_table
+            zh_Hans: enable_table
+          llm_description: Whether to enable table recognition
+          max: null
+          min: null
+          name: enable_table
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        - auto_generate: null
+          default: null
+          form: form
+          human_description:
+            en_US: Whether to enable OCR for scanned documents
+            zh_Hans: 是否为扫描件开启 OCR
+          label:
+            en_US: enable_ocr
+            zh_Hans: enable_ocr
+          llm_description: Whether to enable OCR for scanned documents
+          max: null
+          min: null
+          name: enable_ocr
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        - auto_generate: null
+          default: null
+          form: form
+          human_description:
+            en_US: Specify document language, default auto
+            zh_Hans: 指定文档语言，默认 auto
+          label:
+            en_US: language
+            zh_Hans: language
+          llm_description: Specify document language, default auto
+          max: null
+          min: null
+          name: language
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: string
+        params:
+          file: ''
+        provider_id: langgenius/mineru/mineru
+        provider_name: langgenius/mineru/mineru
+        provider_type: builtin
+        selected: false
+        title: MinerU 解析
+        tool_configurations:
+          enable_formula:
+            type: constant
+            value: true
+          enable_ocr:
+            type: constant
+            value: true
+          enable_table:
+            type: constant
+            value: true
+          language:
+            type: constant
+            value: auto
+          parse_method:
+            type: constant
+            value: auto
+        tool_description: a tool for parsing text, tables, and images, supporting
+          multiple formats such as pdf, pptx, docx, etc.
+        tool_label: Parse File
+        tool_name: parse-file
+        tool_parameters:
+          file:
+            type: variable
+            value:
+            - '1763000000001'
+            - file
+        type: tool
+      height: 52
+      id: '1763000000002'
+      position:
+        x: -440
+        y: 300
+      positionAbsolute:
+        x: -440
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        is_team_authorization: true
+        output_schema:
+          properties:
+            result:
+              description: The result of the general chunk tool.
+              properties:
+                general_chunks:
+                  items:
+                    description: The chunk of the text.
+                    type: string
+                  type: array
+              type: object
+          type: object
+        paramSchemas:
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The text you want to chunk.
+            zh_Hans: 你想要分块的文本。
+          label:
+            en_US: Input Variable
+            zh_Hans: 输入变量
+          llm_description: The text you want to chunk.
+          max: null
+          min: null
+          name: input_variable
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The delimiter of the chunks.
+            zh_Hans: 块的分隔符。
+          label:
+            en_US: Delimiter
+            zh_Hans: 分隔符
+          llm_description: The delimiter of the chunks, the format of the delimiter
+            must be a string.
+          max: null
+          min: null
+          name: delimiter
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: string
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The maximum chunk length.
+            zh_Hans: 最大块的长度。
+          label:
+            en_US: Maximum Chunk Length
+            zh_Hans: 最大块的长度
+          llm_description: The maximum chunk length, the format of the chunk size
+            must be an integer.
+          max: null
+          min: null
+          name: max_chunk_length
+          options: []
+          placeholder: null
+          precision: null
+          required: true
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: The chunk overlap length.
+            zh_Hans: 块的重叠长度。
+          label:
+            en_US: Chunk Overlap Length
+            zh_Hans: 块的重叠长度
+          llm_description: The chunk overlap length, the format of the chunk overlap
+            length must be an integer.
+          max: null
+          min: null
+          name: chunk_overlap_length
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: number
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: Replace consecutive spaces, newlines and tabs
+            zh_Hans: 替换连续的空格、换行符和制表符
+          label:
+            en_US: Replace Consecutive Spaces, Newlines and Tabs
+            zh_Hans: 替换连续的空格、换行符和制表符
+          llm_description: Replace consecutive spaces, newlines and tabs, the format
+            of the replace must be a boolean.
+          max: null
+          min: null
+          name: replace_consecutive_spaces_newlines_tabs
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        - auto_generate: null
+          default: null
+          form: llm
+          human_description:
+            en_US: Delete all URLs and email addresses
+            zh_Hans: 删除所有URL和电子邮件地址
+          label:
+            en_US: Delete All URLs and Email Addresses
+            zh_Hans: 删除所有URL和电子邮件地址
+          llm_description: Delete all URLs and email addresses, the format of the
+            delete must be a boolean.
+          max: null
+          min: null
+          name: delete_all_urls_and_email_addresses
+          options: []
+          placeholder: null
+          precision: null
+          required: false
+          scope: null
+          template: null
+          type: boolean
+        params:
+          chunk_overlap_length: ''
+          delete_all_urls_and_email_addresses: ''
+          delimiter: ''
+          input_variable: ''
+          max_chunk_length: ''
+          replace_consecutive_spaces_newlines_tabs: ''
+        provider_id: langgenius/general_chunker/general_chunker
+        provider_name: langgenius/general_chunker/general_chunker
+        provider_type: builtin
+        selected: false
+        title: 通用分块
+        tool_configurations: {}
+        tool_description: A tool for general text chunking mode, the chunks retrieved
+          and recalled are the same.
+        tool_label: General Chunker
+        tool_name: general_chunker
+        tool_parameters:
+          chunk_overlap_length:
+            type: variable
+            value:
+            - rag
+            - shared
+            - chunk_overlap
+          delete_all_urls_and_email_addresses:
+            type: mixed
+            value: '{{#rag.shared.delete_urls_email#}}'
+          delimiter:
+            type: mixed
+            value: '{{#rag.shared.delimiter#}}'
+          input_variable:
+            type: mixed
+            value: '{{#1763000000002.text#}}'
+          max_chunk_length:
+            type: variable
+            value:
+            - rag
+            - shared
+            - max_chunk_length
+          replace_consecutive_spaces_newlines_tabs:
+            type: mixed
+            value: '{{#rag.shared.replace_consecutive_spaces#}}'
+        type: tool
+      height: 52
+      id: '1763000000003'
+      position:
+        x: -60
+        y: 300
+      positionAbsolute:
+        x: -60
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        chunk_structure: text_model
+        embedding_model: multimodal-embedding-v1
+        embedding_model_provider: langgenius/tongyi/tongyi
+        index_chunk_variable_selector:
+        - '1763000000003'
+        - result
+        indexing_technique: high_quality
+        keyword_number: 10
+        retrieval_model:
+          score_threshold: 0.5
+          score_threshold_enabled: false
+          search_method: semantic_search
+          top_k: 3
+          vector_setting:
+            embedding_model_name: multimodal-embedding-v1
+            embedding_provider_name: langgenius/tongyi/tongyi
+        selected: false
+        title: 知识库索引
+        type: knowledge-index
+      height: 114
+      id: '1763000000004'
+      position:
+        x: 320
+        y: 300
+      positionAbsolute:
+        x: 320
+        y: 300
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 500
+      y: 120
+      zoom: 0.7
+  rag_pipeline_variables:
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: \n\n
+    label: Delimiter
+    max_length: 100
+    options: []
+    placeholder: null
+    required: true
+    tooltips: A delimiter is the character used to separate text. \n\n is recommended
+      for splitting the original document into large parent chunks. You can also use
+      special delimiters defined by yourself.
+    type: text-input
+    unit: null
+    variable: delimiter
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: 1000
+    label: Maximum chunk length
+    max_length: 48
+    options: []
+    placeholder: null
+    required: true
+    tooltips: null
+    type: number
+    unit: characters
+    variable: max_chunk_length
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: 200
+    label: Chunk overlap
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: number
+    unit: characters
+    variable: chunk_overlap
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: true
+    label: Replace consecutive spaces, newlines and tabs
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: checkbox
+    unit: null
+    variable: replace_consecutive_spaces
+  - allow_file_extension: null
+    allow_file_upload_methods: null
+    allowed_file_types: null
+    belong_to_node_id: shared
+    default_value: false
+    label: Delete all URLs and email addresses
+    max_length: 48
+    options: []
+    placeholder: null
+    required: false
+    tooltips: null
+    type: checkbox
+    unit: null
+    variable: delete_urls_email

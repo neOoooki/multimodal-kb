@@ -1,0 +1,80 @@
+# ============================================================
+#  一键起：Qdrant + 检索服务（可选 Open WebUI）
+#
+#    cd deploy
+#    cp .env.example .env      # 填 DASHSCOPE_API_KEY / MINERU_TOKEN
+#    docker compose up -d
+#
+#  首次启动会自动建目录、修权限（见 deploy.sh）。
+# ============================================================
+name: mmkb
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: mmkb-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - ../data/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  mmkb:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: mmkb/service:latest
+    container_name: mmkb-service
+    restart: unless-stopped
+    ports:
+      - "${MMKB_PORT:-8088}:8088"
+    env_file:
+      - .env
+    environment:
+      # 容器内用服务名访问 Qdrant（不要用 localhost）
+      QDRANT_URL: http://qdrant:6333
+      # ↓ 浏览器看到的图片地址。从别的机器访问要改成宿主 IP 或域名
+      MMKB_PUBLIC_URL: ${MMKB_PUBLIC_URL:-http://localhost:8088}
+      MMKB_WORK_DIR: /data/work
+      MMKB_PARSED_DIR: /data/parsed
+    volumes:
+      - ../data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8088/health',timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---- 可选：chat 前端。用 profile 控制，默认不启动 ----
+  #   docker compose --profile chat up -d
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: mmkb-openwebui
+    restart: unless-stopped
+    profiles: ["chat"]
+    ports:
+      - "${OWUI_PORT:-3000}:8080"
+    environment:
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      OPENAI_API_KEY: ${DASHSCOPE_API_KEY}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-mmkb-change-me}
+      # Pipe Function 在容器内访问检索服务，走 compose 网络
+      MMKB_SEARCH_URL: http://mmkb:8088/search
+      MMKB_TOP_K: ${MMKB_TOP_K:-5}
+    volumes:
+      - mmkb-openwebui-data:/app/backend/data
+    depends_on:
+      mmkb:
+        condition: service_healthy
+
+volumes:
+  mmkb-openwebui-data:

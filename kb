@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# kb —— 多模态知识库命令行入口
+#
+# 直接用：./kb <命令>          （无需安装，Python 会从当前目录找到包）
+# 装包后：kb <命令>            （pip install -e . 之后）
+cd "$(dirname "$0")" || exit 1
+exec python3 -m multimodal_kb "$@"

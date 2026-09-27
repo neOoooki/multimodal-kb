@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multimodal-kb"
+version = "0.1.0"
+description = "可迁移的多模态知识库平台：结构化解析 + 两级分块 + 三路向量（融合/文本/图片）+ 混合检索"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["rag", "multimodal", "knowledge-base", "qdrant", "mineru", "retrieval"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Text Processing :: Indexing",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# ★ 核心零第三方依赖：只用 Python 标准库（urllib / http.server / argparse）
+dependencies = []
+
+[project.optional-dependencies]
+# 运维与集成才需要的东西（核心不需要）
+dev = ["playwright>=1.40"]        # 渲染验证用；也可直接用官方容器
+
+[project.scripts]
+kb = "multimodal_kb.cli.main:main"
+
+[tool.setuptools]
+packages = ["multimodal_kb", "multimodal_kb.parse", "multimodal_kb.chunk",
+            "multimodal_kb.annotate", "multimodal_kb.embed", "multimodal_kb.store",
+            "multimodal_kb.search", "multimodal_kb.service", "multimodal_kb.cli"]
+
+[tool.setuptools.package-data]
+multimodal_kb = ["py.typed"]

@@ -1,0 +1,258 @@
+# =============================================================================
+# Dify Chatflow 模板 · 多模态知识库问答
+# -----------------------------------------------------------------------------
+# 适用版本 : Dify 1.17.x（App DSL 0.7.0，mode: advanced-chat）
+# 用途     : 验证多模态知识库能否被正常检索与作答
+# -----------------------------------------------------------------------------
+# 链路: 开始 → 知识库检索(带 vision) → LLM(视觉模型) → 直接回复
+#
+# 多模态是怎么走通的:
+#   1. 知识库检索节点的 `vision.enabled: true` 会让检索结果带上 segment 关联的图片
+#      （Source.files 字段）
+#   2. LLM 节点通过 `context.variable_selector` 拿到检索结果后，Dify 会调用
+#      `_load_context_files()` 把图片收进 context_files
+#   3. 只要 LLM 用的是**带 vision 的模型**，Dify 就把这些图片作为图片内容附进消息
+#      （graphon `llm_utils.py` 里 `files=context_files or []`）
+#   所以「检索节点开 vision + LLM 用视觉模型」两件事要同时满足，图片才会被模型看到。
+#
+# ⚠️ 注意 dataset_ids 是**本机租户专属**的：
+#     2bd89482-c90d-44c1-adfd-524de0df5dd6 = 知识库「电子工艺实训-多模态」
+#   在别的 Dify 实例导入时，这个 ID 不存在，需要在界面上重新选择知识库。
+#   （Dify 的 decrypt_dataset_id 对明文 UUID 有回退，所以这里可以直接写明文）
+# =============================================================================
+app:
+  name: 电子工艺知识问答
+  description: 基于「电子工艺实训-多模态」知识库的问答助手，支持图文检索
+  icon: 📚
+  icon_background: '#E4FBCC'
+  icon_type: emoji
+  mode: advanced-chat
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+      allowed_file_types: []
+      allowed_file_extensions: []
+      allowed_file_upload_methods: []
+      number_limits: 3
+      fileUploadConfig:
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        image_file_size_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+    opening_statement: '你好，我是电子工艺实训助手。可以问我焊接工艺、元器件识别、安全用电等问题。'
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions:
+    - 手工焊接的步骤是什么？
+    - 常用的电子元器件有哪些？
+    - 安全用电要注意什么？
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: knowledge-retrieval
+      id: 1764000000001-source-1764000000002-target
+      source: '1764000000001'
+      sourceHandle: source
+      target: '1764000000002'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: knowledge-retrieval
+        targetType: llm
+      id: 1764000000002-source-1764000000003-target
+      source: '1764000000002'
+      sourceHandle: source
+      target: '1764000000003'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: answer
+      id: 1764000000003-source-1764000000004-target
+      source: '1764000000003'
+      sourceHandle: source
+      target: '1764000000004'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    # ---------------------------------------------------------------------
+    # 节点 1/4 · 开始
+    #   chatflow 的提问来自内置变量 sys.query，因此 variables 留空
+    # ---------------------------------------------------------------------
+    - data:
+        desc: ''
+        selected: false
+        title: 开始
+        type: start
+        variables: []
+      height: 90
+      id: '1764000000001'
+      position:
+        x: 60
+        y: 300
+      positionAbsolute:
+        x: 60
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ---------------------------------------------------------------------
+    # 节点 2/4 · 知识库检索
+    #   vision.enabled: true —— 让检索结果带上图片，这是多模态的关键开关
+    #   top_k=4 便于一次多召回几段图文内容
+    # ---------------------------------------------------------------------
+    - data:
+        dataset_ids:
+        - 2bd89482-c90d-44c1-adfd-524de0df5dd6
+        desc: ''
+        metadata_filtering_mode: disabled
+        multiple_retrieval_config:
+          reranking_enable: false
+          reranking_mode: reranking_model
+          reranking_model:
+            reranking_model_name: ''
+            reranking_provider_name: ''
+          score_threshold: null
+          top_k: 4
+          weights: null
+        query_variable_selector:
+        - sys
+        - query
+        retrieval_mode: multiple
+        selected: false
+        title: 知识库检索
+        type: knowledge-retrieval
+        vision:
+          enabled: true
+      height: 90
+      id: '1764000000002'
+      position:
+        x: 400
+        y: 300
+      positionAbsolute:
+        x: 400
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ---------------------------------------------------------------------
+    # 节点 3/4 · LLM
+    #   provider/name 换成其它带 vision 的模型也能用，例如：
+    #     langgenius/tongyi/tongyi  + qwen3-vl-plus
+    #     langgenius/tongyi/tongyi  + qwen-vl-max
+    #     langgenius/deepseek/deepseek + deepseek-flash      ← 本模板默认
+    # ---------------------------------------------------------------------
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - '1764000000002'
+          - result
+        desc: ''
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          window:
+            enabled: false
+            size: 10
+        model:
+          completion_params:
+            temperature: 0.3
+          mode: chat
+          name: deepseek-flash
+          provider: langgenius/deepseek/deepseek
+        prompt_template:
+        - role: system
+          text: "你是一位电子工艺实训课程的助教。请严格依据下面检索到的资料回答问题。\n\n资料：\n{{#context#}}\n\n要求：\n1. 只使用资料中的信息作答；资料没有提到的内容，明确回答「资料中未提及」。\n2. 如果资料中包含图片，请结合图片内容一起说明。\n3. 回答用中文，条理清晰；涉及操作步骤时按顺序列出。"
+        - role: user
+          text: '{{#sys.query#}}'
+        selected: false
+        title: LLM
+        type: llm
+        variables: []
+        # ⚠️ 必须为 true。graphon 的 _append_file_prompts() 里是
+        #   `if not vision_enabled or not files: return`
+        # 也就是说：即使检索节点把图片放进了 #context_files#，
+        # 只要这里 vision.enabled=false，图片就会被**静默丢弃**，
+        # 模型只能看到正文里的 ![image](...) 文本链接。
+        vision:
+          enabled: true
+          configs:
+            detail: high
+            variable_selector:
+            - sys
+            - files
+      height: 98
+      id: '1764000000003'
+      position:
+        x: 740
+        y: 300
+      positionAbsolute:
+        x: 740
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ---------------------------------------------------------------------
+    # 节点 4/4 · 直接回复
+    #   ⚠️ 变量引用必须用「节点 ID」，不是节点标题！
+    #     写成 {{#llm.text#}} 会原样输出字符串 "llm.text" 而不是模型回答。
+    # ---------------------------------------------------------------------
+    - data:
+        answer: '{{#1764000000003.text#}}'
+        desc: ''
+        selected: false
+        title: 直接回复
+        type: answer
+        variables: []
+      height: 102
+      id: '1764000000004'
+      position:
+        x: 1080
+        y: 300
+      positionAbsolute:
+        x: 1080
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 120
+      zoom: 0.8

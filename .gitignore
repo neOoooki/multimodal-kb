@@ -1,0 +1,33 @@
+# ---- 运行时数据（绝不入库）----
+data/
+*.qdrant/
+parsed/
+work/
+
+# ---- 密钥 ----
+.env
+*.key
+.secrets/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.py.typed
+
+# ---- 验证产物 ----
+_verify/
+node_modules/
+*.png
+!docs/evidence/*.png
+
+# ---- 编辑器/系统 ----
+.vscode/
+.idea/
+.DS_Store
